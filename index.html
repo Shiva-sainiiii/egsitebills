@@ -24,6 +24,8 @@ label{display:block;font-size:13px;font-weight:600;color:var(--mut);margin-botto
 input,textarea{width:100%;font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fff}
 textarea{resize:vertical;min-height:90px}
 input:focus,textarea:focus,button:focus-visible,summary:focus-visible{outline:2px solid var(--teal);outline-offset:1px}
+.chk{display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:500;color:var(--ink);cursor:pointer}.chk input{width:auto;margin:0;accent-color:var(--teal)}
+input:disabled{background:var(--soft);color:var(--mut);cursor:not-allowed}
 .bal{display:flex;justify-content:space-between;align-items:center;margin:18px 0;padding:14px 16px;background:var(--tealbg);border-radius:10px}
 .bal span{font-weight:600}.bal strong{font-size:24px;color:var(--teal)}
 details{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:18px}
@@ -73,7 +75,7 @@ dialog h2{margin:0}dialog p{margin:2px 0}
     <div><label for="date">Date</label><input type="date" id="date"></div>
     <div class="full"><label for="service">Service</label><input id="service"></div>
     <div><label for="total">Total amount (₹)</label><input type="number" id="total" inputmode="numeric" min="0"></div>
-    <div><label for="advance">Advance amount (₹)</label><input type="number" id="advance" inputmode="numeric" min="0"></div>
+    <div><label for="advance">Advance amount (₹)</label><input type="number" id="advance" inputmode="numeric" min="0"><label class="chk"><input type="checkbox" id="full"> Full payment at once</label></div>
   </div>
   <div class="bal"><span>Balance due</span><strong id="bal">₹0</strong></div>
   <details id="biz">
@@ -123,11 +125,11 @@ const fmtDate=s=>new Date(s+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digi
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const today=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
 
-function calc(){const b=(+$("total").value||0)-(+$("advance").value||0);$("bal").textContent=money(b)}
+function calc(){const f=$("full").checked;if(f)$("advance").value=$("total").value;$("advance").disabled=f;const b=(+$("total").value||0)-(+$("advance").value||0);$("bal").textContent=money(b)}
 function resetForm(){
   editId=null;$("editBar").hidden=true;$("gen").textContent="Create bill and show QR";
   ["client","clinic","location"].forEach(i=>$(i).value="");
-  $("service").value="Website + SEO + Chatbot";$("total").value=6000;$("advance").value=3000;$("date").value=today();
+  $("service").value="Website + SEO + Chatbot";$("total").value=6000;$("advance").value=3000;$("full").checked=false;$("date").value=today();
   SET.forEach(k=>$(k).value=settings[k]);calc();
 }
 function readForm(){
@@ -252,12 +254,12 @@ $("list").addEventListener("click",e=>{
   if(b.dataset.act==="del"&&confirm("Delete invoice "+h.no+"?")){history=history.filter(x=>x.id!==h.id);wr(KEY,history);render();if(editId===h.id)resetForm()}
   if(b.dataset.act==="edit"){
     ["client","clinic","location","service","total","advance","date"].forEach(k=>$(k).value=h[k]);
-    SET.forEach(k=>$(k).value=h[k]);editId=h.id;$("editNo").textContent=h.no;$("editBar").hidden=false;$("gen").textContent="Update bill and download PDF";calc();window.scrollTo({top:0,behavior:"smooth"});
+    SET.forEach(k=>$(k).value=h[k]);$("full").checked=h.advance>=h.total;editId=h.id;$("editNo").textContent=h.no;$("editBar").hidden=false;$("gen").textContent="Update bill and download PDF";calc();window.scrollTo({top:0,behavior:"smooth"});
   }
 });
-["total","advance"].forEach(i=>$(i).addEventListener("input",calc));
+["total","advance"].forEach(i=>{$(i).addEventListener("input",calc);$(i).addEventListener("wheel",e=>e.target.blur(),{passive:true})});
 SET.forEach(k=>$(k).addEventListener("input",()=>{settings[k]=$(k).value;wr(SKEY,settings)}));
-$("cancelEdit").onclick=resetForm;$("gen").onclick=generate;
+$("full").addEventListener("change",calc);$("cancelEdit").onclick=resetForm;$("gen").onclick=generate;
 $("hdrLogo").src=LOGO;resetForm();$("biz").open=!settings.phone;showQr();render();
 </script>
 </body>
