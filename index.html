@@ -49,6 +49,14 @@ ul{list-style:none;margin:0;padding:0}
 .acts button{font-size:13px;padding:4px 10px}
 .danger{color:var(--red)}
 .empty{color:var(--mut);background:var(--soft);border-radius:10px;padding:16px}
+dialog{border:0;border-radius:14px;padding:22px;width:min(380px,92vw);text-align:center}
+dialog::backdrop{background:rgba(18,38,63,.45)}
+dialog h2{margin:0}dialog p{margin:2px 0}
+.amt{font-size:34px;font-weight:700;color:var(--teal);margin:6px 0 12px}
+#qrBox img,#qrPrev img{width:240px;max-width:100%;border:1px solid var(--line);border-radius:10px;display:block;margin:0 auto}
+#qrPrev{margin-top:8px}
+.seg{display:flex;gap:8px;margin:14px 0}.seg button{flex:1}
+.seg .on{background:var(--tealbg);border-color:var(--teal);color:var(--teal);font-weight:600}
 </style>
 </head>
 <body>
@@ -75,10 +83,11 @@ ul{list-style:none;margin:0;padding:0}
       <div><label for="phone">Your phone number</label><input id="phone" inputmode="tel" placeholder="+91 98XXXXXXXX"></div>
       <div><label for="payment">UPI / bank details (optional)</label><input id="payment" placeholder="UPI: yourname@upi"></div>
       <div class="full"><label for="features">What’s included (one point per line)</label><textarea id="features" rows="8"></textarea></div>
+      <div class="full"><label for="qrFile">Your Paytm QR (screenshot or photo)</label><input type="file" id="qrFile" accept="image/*"><div id="qrPrev"></div></div>
       <div class="full"><label for="notes">Payment terms</label><textarea id="notes" rows="2"></textarea></div>
     </div>
   </details>
-  <button class="primary" id="gen" type="button">Generate PDF</button>
+  <button class="primary" id="gen" type="button">Create bill and show QR</button>
 </section>
 <aside>
   <h2>Invoice history</h2>
@@ -86,6 +95,15 @@ ul{list-style:none;margin:0;padding:0}
   <ul id="list"></ul>
 </aside>
 </main>
+<dialog id="payDlg">
+  <h2>Collect payment</h2>
+  <p id="payFor"></p>
+  <div class="amt" id="payAmt"></div>
+  <div id="qrBox"></div>
+  <div class="seg"><button type="button" data-mode="UPI (QR)">Paid by QR</button><button type="button" data-mode="Cash">Paid in cash</button></div>
+  <button class="primary" id="payDone" type="button">Done: payment received</button>
+  <p><button class="link" id="payCancel" type="button">Back to form</button></p>
+</dialog>
 <script>
 const $=id=>document.getElementById(id);
 const KEY="egbill_history",SKEY="egbill_settings",CKEY="egbill_counter";
@@ -103,7 +121,7 @@ const today=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth
 
 function calc(){const b=(+$("total").value||0)-(+$("advance").value||0);$("bal").textContent=money(b)}
 function resetForm(){
-  editId=null;$("editBar").hidden=true;$("gen").textContent="Generate PDF";
+  editId=null;$("editBar").hidden=true;$("gen").textContent="Create bill and show QR";
   ["client","clinic","location"].forEach(i=>$(i).value="");
   $("service").value="Website + SEO + Chatbot";$("total").value=6000;$("advance").value=3000;$("date").value=today();
   SET.forEach(k=>$(k).value=settings[k]);calc();
@@ -157,6 +175,7 @@ function makePDF(r){
   d.setTextColor(...teal);d.setFont("helvetica","bold");d.setFontSize(12);d.text("Balance Due",lx,y+2);d.text(money(bal,"Rs. "),rx,y+2,{align:"right"});
   d.setDrawColor(...teal);d.setLineWidth(0.5);d.roundedRect(M,y0-4,48,10,2,2);
   d.setFontSize(10);d.text(bal>0?"ADVANCE RECEIVED":"PAID IN FULL",M+24,y0+2.5,{align:"center"});
+  if(r.mode){d.setFont("helvetica","normal");d.setFontSize(9);d.setTextColor(...grey);d.text("Last payment received via "+r.mode,rx,y+11,{align:"right"})}
   y+=18;d.setLineWidth(0.2);
   if(r.payment){d.setFont("helvetica","bold");d.setFontSize(9.5);d.setTextColor(...grey);d.text("Payment details",M,y);d.setFont("helvetica","normal");d.setTextColor(...navy);d.text(d.splitTextToSize(r.payment,100),M,y+5.5);y+=14}
   if(r.notes){d.setFont("helvetica","bold");d.setFontSize(9.5);d.setTextColor(...grey);d.text("Terms",M,y);d.setFont("helvetica","normal");d.setTextColor(...navy);d.text(d.splitTextToSize(r.notes,100),M,y+5.5)}
@@ -169,31 +188,60 @@ function makePDF(r){
 }
 function generate(){
   const r=readForm();if(!r)return;
-  wr(SKEY,Object.fromEntries(SET.map(k=>[k,r[k]])));settings=Object.fromEntries(SET.map(k=>[k,r[k]]));
-  if(editId){const i=history.findIndex(h=>h.id===editId);r.id=editId;r.no=history[i].no;history[i]=r}
-  else{const n=(rd(CKEY,0)||0)+1;wr(CKEY,n);r.id=String(Date.now());r.no="EGWS-"+r.date.slice(0,4)+"-"+String(n).padStart(3,"0");history.unshift(r)}
-  wr(KEY,history);render();makePDF(r);resetForm();
+  settings=Object.assign(settings,Object.fromEntries(SET.map(k=>[k,r[k]])));wr(SKEY,settings);
+  if(editId){const i=history.findIndex(h=>h.id===editId);r.id=editId;r.no=history[i].no;r.mode=history[i].mode;history[i]=r;wr(KEY,history);render();makePDF(r);resetForm();return}
+  if(r.advance>0)openPay(r,r.advance,true);else commit(r,true,0,"");
 }
+let pay=null,mode="UPI (QR)";
+function commit(r,isNew,amt,m){
+  if(isNew){const n=(rd(CKEY,0)||0)+1;wr(CKEY,n);r.id=String(Date.now());r.no="EGWS-"+r.date.slice(0,4)+"-"+String(n).padStart(3,"0");history.unshift(r)}
+  else r.advance+=amt;
+  r.mode=m;wr(KEY,history);render();makePDF(r);if(isNew)resetForm();
+}
+function setMode(m){mode=m;document.querySelectorAll(".seg button").forEach(b=>b.classList.toggle("on",b.dataset.mode===m));$("qrBox").hidden=m!=="UPI (QR)"}
+function openPay(r,amt,isNew){
+  pay={r,amt,isNew};
+  $("payFor").textContent="From "+(r.clinic||r.client)+(r.no?" ("+r.no+")":"");
+  $("payAmt").textContent=money(amt);
+  $("qrBox").innerHTML=settings.qr?`<img src="${settings.qr}" alt="Paytm QR">`:`<p class="empty">Paytm QR is not added yet. Add it in Business details, or choose cash.</p>`;
+  setMode("UPI (QR)");$("payDlg").showModal();
+}
+function showQr(){$("qrPrev").innerHTML=settings.qr?`<img src="${settings.qr}" alt="Your Paytm QR"><button class="link" id="qrDel" type="button">Remove QR</button>`:""}
+$("payDone").onclick=()=>{$("payDlg").close();commit(pay.r,pay.isNew,pay.amt,mode)};
+$("payCancel").onclick=()=>$("payDlg").close();
+document.querySelector(".seg").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
+$("qrPrev").onclick=e=>{if(e.target.id==="qrDel"){delete settings.qr;wr(SKEY,settings);showQr()}};
+$("qrFile").addEventListener("change",e=>{
+  const f=e.target.files[0];if(!f)return;
+  const fr=new FileReader();
+  fr.onload=()=>{const im=new Image();im.onload=()=>{
+    const k=Math.min(1,700/Math.max(im.width,im.height)),c=document.createElement("canvas");
+    c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);
+    c.getContext("2d").drawImage(im,0,0,c.width,c.height);
+    settings.qr=c.toDataURL("image/png");wr(SKEY,settings);showQr();e.target.value=""};im.src=fr.result};
+  fr.readAsDataURL(f);
+});
 function render(){
   const bill=history.reduce((a,h)=>a+h.total,0),rec=history.reduce((a,h)=>a+h.advance,0);
   $("stats").innerHTML=`<div><span>Total billed</span><b>${money(bill)}</b></div><div><span>Received</span><b>${money(rec)}</b></div><div><span>Pending</span><b>${money(bill-rec)}</b></div>`;
   $("list").innerHTML=history.length?history.map(h=>{const b=h.total-h.advance;
-    return `<li class="row"><div class="top"><div><b>${esc(h.clinic||h.client)}</b><div class="meta"><span>${esc(h.no)}</span><span>${fmtDate(h.date)}</span>${h.clinic?`<span>${esc(h.client)}</span>`:""}</div></div><div style="text-align:right"><b>${money(h.total)}</b><br><span class="chip ${b>0?"due":"paid"}">${b>0?"Due "+money(b):"Paid"}</span></div></div><div class="acts"><button data-act="pdf" data-id="${h.id}">Download PDF</button><button data-act="edit" data-id="${h.id}">Edit</button><button class="danger" data-act="del" data-id="${h.id}">Delete</button></div></li>`}).join(""):`<li class="empty">No invoices yet. Fill the form and generate your first one; it will be saved here.</li>`;
+    return `<li class="row"><div class="top"><div><b>${esc(h.clinic||h.client)}</b><div class="meta"><span>${esc(h.no)}</span><span>${fmtDate(h.date)}</span>${h.clinic?`<span>${esc(h.client)}</span>`:""}</div></div><div style="text-align:right"><b>${money(h.total)}</b><br><span class="chip ${b>0?"due":"paid"}">${b>0?"Due "+money(b):"Paid"}</span></div></div><div class="acts">${b>0?`<button data-act="collect" data-id="${h.id}">Collect ${money(b)}</button>`:""}<button data-act="pdf" data-id="${h.id}">Download PDF</button><button data-act="edit" data-id="${h.id}">Edit</button><button class="danger" data-act="del" data-id="${h.id}">Delete</button></div></li>`}).join(""):`<li class="empty">No invoices yet. Fill the form and generate your first one; it will be saved here.</li>`;
 }
 $("list").addEventListener("click",e=>{
   const b=e.target.closest("button");if(!b)return;
   const h=history.find(x=>x.id===b.dataset.id);if(!h)return;
   if(b.dataset.act==="pdf")makePDF(h);
+  if(b.dataset.act==="collect")openPay(h,h.total-h.advance,false);
   if(b.dataset.act==="del"&&confirm("Delete invoice "+h.no+"?")){history=history.filter(x=>x.id!==h.id);wr(KEY,history);render();if(editId===h.id)resetForm()}
   if(b.dataset.act==="edit"){
     ["client","clinic","location","service","total","advance","date"].forEach(k=>$(k).value=h[k]);
-    SET.forEach(k=>$(k).value=h[k]);editId=h.id;$("editNo").textContent=h.no;$("editBar").hidden=false;$("gen").textContent="Update and download PDF";calc();window.scrollTo({top:0,behavior:"smooth"});
+    SET.forEach(k=>$(k).value=h[k]);editId=h.id;$("editNo").textContent=h.no;$("editBar").hidden=false;$("gen").textContent="Update bill and download PDF";calc();window.scrollTo({top:0,behavior:"smooth"});
   }
 });
 ["total","advance"].forEach(i=>$(i).addEventListener("input",calc));
 SET.forEach(k=>$(k).addEventListener("input",()=>{settings[k]=$(k).value;wr(SKEY,settings)}));
 $("cancelEdit").onclick=resetForm;$("gen").onclick=generate;
-resetForm();$("biz").open=!settings.phone;render();
+resetForm();$("biz").open=!settings.phone;showQr();render();
 </script>
 </body>
 </html>
